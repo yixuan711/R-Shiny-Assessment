@@ -29,6 +29,10 @@ server <- function(input, output, session) {
   # Initialize claims data
   claims_data <- reactiveVal(NULL)
   
+  # Initialize prev_loss_year_data and prev_year_dev3
+  prev_loss_year_data <- NULL
+  prev_year_dev3 <- NULL
+  
   # Read the uploaded Excel file
   observeEvent(input$file, {
     req(input$file)
@@ -45,7 +49,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # Calculate cumulative claims
+#Cumulative claims calculation
   calculate_cumulative_claims <- eventReactive(input$calculate_btn, {
     req(claims_data())
     data <- claims_data()
@@ -64,45 +68,54 @@ server <- function(input, output, session) {
       `Cumulative Claims` = numeric()
     )
     
+    # Initialize prev_loss_year_data and prev_year_dev3
+    prev_loss_year_data <- NULL
+    prev_year_dev3 <- NULL
+    
     # Loop through each loss year
     for (i in unique(data$`Loss Year`)) {
       loss_year_data <- data[data$`Loss Year` == i, ]
       
+      # Determine the maximum number of development years from user input or data
+      max_dev_years <- max(loss_year_data$`Development Year`)
+      
       # Initialize cumulative claims for this loss year
       cumulative_year <- data.frame(
-        `Loss Year` = rep(i, 4),
-        `Development Year` = 1:4,
+        `Loss Year` = rep(i, max_dev_years),
+        `Development Year` = 1:max_dev_years,
         `Cumulative Claims` = NA
-      )
+      ) 
       
-      # Calculate cumulative claims for defined claims amount
+    # Calculate cumulative claims for defined claims amount
       defined_claims <- loss_year_data[!is.na(loss_year_data$`Claims Amount`), ]
       if (nrow(defined_claims) > 0) {
         for (j in 1:4) {
-          cumulative_year$`Cumulative Claims`[j] <- sum(defined_claims$`Claims Amount`[defined_claims$`Development Year` <= j])
+          browser()  # This will pause the execution and allow you to interactively inspect the variables
+          cumulative_year$'Cumulative Claims'[j] <- sum(defined_claims$'Claims Amount'[defined_claims$'Development Year' <= j])
         }
       }
       
       # Calculate cumulative claims for non-defined claims amount using tail factor or previous year's claims amount
-      if (nrow(defined_claims) < 4) {
-        if (i == min(data$`Loss Year`)) {
-          # Type 3 Calculation for latest Development Year 
-          cumulative_year$`Cumulative Claims`[4] <- cumulative_year$`Cumulative Claims`[3] * input$tail_factor
+      if (nrow(defined_claims) < max_dev_years) {
+        if (!is.null(prev_loss_year_data) && any(is.na(prev_loss_year_data$`Cumulative Claims`))) {
+          # Type 2 Calculation (based on sum of past years)
+          max_dev_years <- min(max_dev_years, 3)  # Ensure max_dev_years is at most 3
+          cumulative_year$`Cumulative Claims`[max_dev_years] <- prev_year_dev3 * sum(prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == max_dev_years]) / sum(prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == max_dev_years - 1])
         } else {
-          prev_loss_year_data <- cumulative_data[cumulative_data$`Loss Year` == i - 1, ]
-          prev_year_dev3 <- prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == 3]
-          
-          # Check if there are non-defined claims in past loss years with the same development year
-          if (any(is.na(prev_loss_year_data$`Cumulative Claims`))) {
-            # Type 1 Calculation
-            first_loss_year_same_dev <- cumulative_data[cumulative_data$`Loss Year` == i & cumulative_data$`Development Year` == 3, ]
-            cumulative_year$`Cumulative Claims`[3] <- prev_year_dev3 * first_loss_year_same_dev$`Cumulative Claims`[1] / first_loss_year_same_dev$`Cumulative Claims`[3]
-          } else {
-            # Type 2 Calculation
-            cumulative_year$`Cumulative Claims`[3] <- prev_year_dev3 * sum(prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == 3]) / sum(prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == 2])
+          # Type 2 Calculation (based on first loss year)
+          first_loss_year_same_dev <- cumulative_data[cumulative_data$`Loss Year` == i & cumulative_data$`Development Year` == max_dev_years, ]
+          if (nrow(first_loss_year_same_dev) > 0) {
+            cumulative_year$`Cumulative Claims`[max_dev_years] <- prev_year_dev3 * first_loss_year_same_dev$`Cumulative Claims`[1] / first_loss_year_same_dev$`Cumulative Claims`[max_dev_years]
           }
         }
+        
+        # Type 3 Calculation (latest dev year)
+        cumulative_year$`Cumulative Claims`[max_dev_years + 1] <- cumulative_year$`Cumulative Claims`[max_dev_years] * input$tail_factor
       }
+      
+      # Update prev_loss_year_data and prev_year_dev3
+      prev_loss_year_data <- cumulative_year
+      prev_year_dev3 <- cumulative_year$`Cumulative Claims`[3]
       
       cumulative_data <- bind_rows(cumulative_data, cumulative_year)
     }
