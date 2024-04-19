@@ -6,7 +6,7 @@ library(readxl)
 
 # Define UI
 ui <- fluidPage(
-  titlePanel("Cumulative Paid Claims Calculation"),
+  titlePanel("Cumulative Paid Claims Calculator"),
   sidebarLayout(
     sidebarPanel(
       fileInput("file", "Upload Excel file", accept = c(".xlsx")),
@@ -29,10 +29,6 @@ server <- function(input, output, session) {
   # Initialize claims data
   claims_data <- reactiveVal(NULL)
   
-  # Initialize prev_loss_year_data and prev_year_dev3
-  prev_loss_year_data <- NULL
-  prev_year_dev3 <- NULL
-  
   # Read the uploaded Excel file
   observeEvent(input$file, {
     req(input$file)
@@ -49,7 +45,7 @@ server <- function(input, output, session) {
     }
   })
   
-#Cumulative claims calculation
+# Cumulative claims calculation
   calculate_cumulative_claims <- eventReactive(input$calculate_btn, {
     req(claims_data())
     data <- claims_data()
@@ -86,39 +82,40 @@ server <- function(input, output, session) {
         `Cumulative Claims` = NA
       ) 
       
-    # Calculate cumulative claims for defined claims amount
+      # Calculate cumulative claims for defined claims amount only if claims amount is shown
       defined_claims <- loss_year_data[!is.na(loss_year_data$`Claims Amount`), ]
       if (nrow(defined_claims) > 0) {
-        for (j in 1:4) {
-          browser()  # This will pause the execution and allow you to interactively inspect the variables
+        for (j in 1:max_dev_years) {
           cumulative_year$'Cumulative Claims'[j] <- sum(defined_claims$'Claims Amount'[defined_claims$'Development Year' <= j])
         }
       }
       
       # Calculate cumulative claims for non-defined claims amount using tail factor or previous year's claims amount
       if (nrow(defined_claims) < max_dev_years) {
-        if (!is.null(prev_loss_year_data) && any(is.na(prev_loss_year_data$`Cumulative Claims`))) {
-          # Type 2 Calculation (based on sum of past years)
-          max_dev_years <- min(max_dev_years, 3)  # Ensure max_dev_years is at most 3
-          cumulative_year$`Cumulative Claims`[max_dev_years] <- prev_year_dev3 * sum(prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == max_dev_years]) / sum(prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == max_dev_years - 1])
+        if (any(!is.na(prev_loss_year_data$`Cumulative Claims`) & prev_loss_year_data$`Development Year` == max_dev_years)) {
+          # Step 1 Calculation (based on sum of past years)
+          cumulative_year$`Cumulative Claims`[1:max_dev_years] <- prev_year_dev3 * sum(prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == max_dev_years]) / sum(prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == max_dev_years - 1])
+        } else if (any(!is.na(prev_loss_year_data$`Cumulative Claims`) & prev_loss_year_data$`Development Year` < max_dev_years)) {
+          # Step 2 Calculation (based on one cumulative claims amount)
+          cumulative_year$`Cumulative Claims`[1:max_dev_years] <- prev_year_dev3 * prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == max_dev_years] / prev_loss_year_data$`Cumulative Claims`[prev_loss_year_data$`Development Year` == max_dev_years - 1]
         } else {
-          # Type 2 Calculation (based on first loss year)
-          first_loss_year_same_dev <- cumulative_data[cumulative_data$`Loss Year` == i & cumulative_data$`Development Year` == max_dev_years, ]
-          if (nrow(first_loss_year_same_dev) > 0) {
-            cumulative_year$`Cumulative Claims`[max_dev_years] <- prev_year_dev3 * first_loss_year_same_dev$`Cumulative Claims`[1] / first_loss_year_same_dev$`Cumulative Claims`[max_dev_years]
-          }
+          # Step 3 Calculation (latest dev year)
+          cumulative_year$`Cumulative Claims`[max_dev_years + 1] <- cumulative_year$`Cumulative Claims`[max_dev_years] * input$tail_factor
         }
-        
-        # Type 3 Calculation (latest dev year)
-        cumulative_year$`Cumulative Claims`[max_dev_years + 1] <- cumulative_year$`Cumulative Claims`[max_dev_years] * input$tail_factor
       }
       
       # Update prev_loss_year_data and prev_year_dev3
       prev_loss_year_data <- cumulative_year
-      prev_year_dev3 <- cumulative_year$`Cumulative Claims`[3]
+      prev_year_dev3 <- cumulative_year$`Cumulative Claims`[max_dev_years]
       
       cumulative_data <- bind_rows(cumulative_data, cumulative_year)
     }
+    
+    # Determine the maximum development year with Step 3 calculation
+    max_dev_year_step3 <- max(cumulative_data$`Development Year`[!is.na(cumulative_data$`Cumulative Claims`)])
+    
+    # Filter the cumulative data up to the subsequent of the maximum development year with Step 3 calculation
+    cumulative_data <- cumulative_data[cumulative_data$`Development Year` <= max_dev_year_step3 + 1, ]
     
     # Remove .00 from Loss Year and Development Year
     cumulative_data$`Loss Year` <- as.integer(cumulative_data$`Loss Year`)
@@ -138,14 +135,18 @@ server <- function(input, output, session) {
     cumulative_data <- calculate_cumulative_claims()
     if (!is.null(cumulative_data)) {
       # Pivot the data
-      cumulative_data <- cumulative_data %>% 
+      cumulative_table <- cumulative_data %>% 
         pivot_wider(names_from = `Development Year`, values_from = `Cumulative Claims`)
       
-      # Remove .00 from Loss Year and Development Year
-      cumulative_data$`Loss Year` <- as.integer(cumulative_data$`Loss Year`)
-      cumulative_data$`Development Year` <- as.integer(cumulative_data$`Development Year`)
+      # Reorder columns to have Development Year in ascending order
+      cumulative_table <- cumulative_table %>%
+        select(`Loss Year`, order(as.numeric(colnames(cumulative_table))[-1]) + 1)
       
-      return(cumulative_data)
+      # Remove .00 from Loss Year and Development Year
+      cumulative_table$`Loss Year` <- as.integer(cumulative_table$`Loss Year`)
+      colnames(cumulative_table)[-1] <- as.integer(colnames(cumulative_table)[-1])
+      
+      return(cumulative_table)
     }
     return(NULL)
   })
