@@ -43,6 +43,8 @@ server <- function(input, output, session) {
     if (is.null(inFile)) return(NULL)
     data <- read_excel(inFile$datapath)
     if ("Loss Year" %in% colnames(data) && "Development Year" %in% colnames(data) && "Claims Amount" %in% colnames(data)) {
+      data$`Loss Year` <- as.integer(data$`Loss Year`)
+      data$`Development Year` <- as.integer(data$`Development Year`)
       claims_data(data)
     } else {
       showModal(modalDialog(
@@ -57,18 +59,11 @@ server <- function(input, output, session) {
     req(claims_data())
     data <- claims_data()
     
-    # Convert Loss Year and Development Year to integer
-    data$`Loss Year` <- as.integer(data$`Loss Year`)
-    data$`Development Year` <- as.integer(data$`Development Year`)
-    
     # Sort data by Loss Year and Development Year
     data <- data[order(data$`Loss Year`, data$`Development Year`), ]
     
     # Initialize a list to store cumulative data frames
     cumulative_data_list <- list()
-    
-    # Initialize prev_year_dev3
-    prev_year_dev3 <- 0
     
     # Loop through each loss year
     for (i in unique(data$`Loss Year`)) {
@@ -84,7 +79,7 @@ server <- function(input, output, session) {
         `Cumulative Claims` = NA
       ) 
       
-      # Calculate cumulative claims for defined claims amount only if claims amount is shown
+      # Calculate cumulative claims for defined claims amount
       defined_claims <- loss_year_data[!is.na(loss_year_data$`Claims Amount`), ]
       if (nrow(defined_claims) > 0) {
         for (j in 1:max_dev_years) {
@@ -92,19 +87,37 @@ server <- function(input, output, session) {
         }
       }
       
+      # Calculate cumulative claims for non-defined claims amount using tail factor or previous year's claims amount
+      if (nrow(defined_claims) < max_dev_years) {
+        current_dev_year <- max(defined_claims$`Development Year`)
+        sum_pastcum_same_dev <- sum(cumulative_data()$`Cumulative Claims`[cumulative_data()$`Development Year` == current_dev_year & cumulative_data()$`Loss Year` != i])
+        sum_pastcum_prev_dev <- sum(cumulative_data()$`Cumulative Claims`[cumulative_data()$`Development Year` == current_dev_year - 1 & cumulative_data()$`Loss Year` != i])
+        prev_loss_dev <- cumulative_data()$`Cumulative Claims`[cumulative_data()$`Loss Year` == i & cumulative_data()$`Development Year` == current_dev_year - 1]
+        
+        if (any(!is.na(cumulative_data()$`Cumulative Claims`) & cumulative_data()$`Development Year` == current_dev_year)) {
+          # Step 1 Calculation 
+          cumulative_year$`Cumulative Claims`[1:max_dev_years] <- prev_loss_dev * sum_pastcum_same_dev / sum_pastcum_prev_dev
+        } else if (any(!is.na(cumulative_data()$`Cumulative Claims`) & cumulative_data()$`Development Year` < current_dev_year)) {
+          # Step 2 Calculation (based on one cumulative claims amount)
+          cum_prevloss_samedev <- cumulative_data()$`Cumulative Claims`[cumulative_data()$`Development Year` == current_dev_year]
+          cum_prevloss_prevdev <- cumulative_data()$`Cumulative Claims`[cumulative_data()$`Development Year` == max_dev_years - 1]
+          cumulative_year$`Cumulative Claims`[1:max_dev_years] <- prev_loss_dev * cum_prevloss_samedev / cum_prevloss_prevdev
+        } else {
+          # Step 3 Calculation (latest dev year)
+          cumulative_year$`Cumulative Claims`[max_dev_years + 1] <- cumulative_year$`Cumulative Claims`[max_dev_years] * input$tail_factor
+        }
+      }
+      
       # Append cumulative_year to the list
       cumulative_data_list[[i]] <- cumulative_year
       
-      # Update prev_year_dev3
-      prev_year_dev3 <- cumulative_year$`Cumulative Claims`[max_dev_years]
+      # Print intermediate result for debugging
+      print(paste("Cumulative Data for Loss Year", i))
+      print(cumulative_year)
     }
     
     # Combine all cumulative data frames into one
     cumulative_data <- bind_rows(cumulative_data_list)
-    
-    # Remove .00 from Loss Year and Development Year
-    cumulative_data$`Loss Year` <- as.integer(cumulative_data$`Loss Year`)
-    cumulative_data$`Development Year` <- as.integer(cumulative_data$`Development Year`)
     
     return(cumulative_data)
   })
@@ -118,23 +131,36 @@ server <- function(input, output, session) {
   # Render cumulative claims table
   output$cumulative_claims_table <- renderTable({
     cumulative_data <- calculate_cumulative_claims()
+    
     if (!is.null(cumulative_data)) {
-      # Check if 'Loss Year' column exists before mutating
-      if ('Loss Year' %in% colnames(cumulative_data())) {
-        cumulative_data <- cumulative_data() %>%
-          mutate(`Loss Year` = as.integer(`Loss Year`))
-      }
+      # Convert Loss Year and Development Year to integers
+      cumulative_data$`Loss Year` <- as.integer(cumulative_data$`Loss Year`)
+      cumulative_data$`Development Year` <- as.integer(cumulative_data$`Development Year`)
       
-      # Pivot the data
-      cumulative_table <- cumulative_data %>% 
+      # Sort data by Loss Year and Development Year
+      cumulative_data <- cumulative_data[order(cumulative_data$`Loss Year`, cumulative_data$`Development Year`), ]
+      
+      # Split data into defined and non-defined claims
+      defined_claims <- cumulative_data[!is.na(cumulative_data$`Cumulative Claims`), ]
+      undefined_claims <- cumulative_data[is.na(cumulative_data$`Cumulative Claims`), ]
+      
+      # Pivot the defined claims data
+      defined_pivot <- defined_claims %>% 
         pivot_wider(names_from = `Development Year`, values_from = `Cumulative Claims`)
       
-      # Reorder columns to have Development Year in ascending order
-      cumulative_table <- cumulative_table %>%
-        select(`Loss Year`, order(as.integer(colnames(cumulative_table))[-1]) + 1)
+      # Pivot the non-defined claims data
+      undefined_pivot <- undefined_claims %>% 
+        pivot_wider(names_from = `Development Year`, values_from = `Cumulative Claims`)
+      
+      # Merge the two tables
+      cumulative_table <- merge(defined_pivot, undefined_pivot, by = "Loss Year", suffixes = c("_Defined", "_Non_Defined"))
+      
+      # Order columns for better visualization
+      cumulative_table <- cumulative_table[, c(1, order(as.integer(colnames(cumulative_table)[2:ncol(cumulative_table)])) + 1)]
       
       return(cumulative_table)
     }
+    
     return(NULL)
   })
   
