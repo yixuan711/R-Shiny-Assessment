@@ -3,6 +3,7 @@ library(dplyr)
 library(ggplot2)
 library(tidyr)
 library(readxl)
+library(reshape2)
 
 # Define UI
 ui <- fluidPage(
@@ -140,34 +141,8 @@ server <- function(input, output, session) {
       # Sort data by Loss Year and Development Year
       cumulative_data <- cumulative_data[order(cumulative_data$Loss_Year, cumulative_data$Development_Year), ]
       
-      # Separate defined and undefined claims
-      defined_claims <- cumulative_data[!is.na(cumulative_data$Cumulative_Claims), ]
-      undefined_claims <- cumulative_data[is.na(cumulative_data$Cumulative_Claims), ]
-      
-      if (nrow(defined_claims) > 0) {
-        # Calculate cumulative claims for undefined claims
-        max_dev_years <- max(defined_claims$Development_Year, na.rm = TRUE)
-        
-        for (i in unique(undefined_claims$Loss_Year)) {
-          undefined_loss_year <- undefined_claims[undefined_claims$Loss_Year == i, ]
-          last_defined_year <- max(defined_claims$Development_Year[defined_claims$Loss_Year == i], na.rm = TRUE)
-          
-          # Calculate cumulative claims for undefined claims using the tail factor or the last defined year
-          undefined_claims$Cumulative_Claims[undefined_claims$Loss_Year == i] <- ifelse(is.na(last_defined_year), 
-                                                                                        0,
-                                                                                        defined_claims$Cumulative_Claims[defined_claims$Loss_Year == i & 
-                                                                                                                           defined_claims$Development_Year == last_defined_year] * input$tail_factor)
-        }
-        
-        # Merge defined and undefined claims
-        cumulative_table <- merge(defined_claims, undefined_claims, by = c("Loss_Year", "Development_Year"), all = TRUE)
-        
-        # Pivot the table
-        cumulative_table <- spread(cumulative_table, Development_Year, Cumulative_Claims)
-        
-      } else {
-        cumulative_table <- spread(undefined_claims, Development_Year, Cumulative_Claims)
-      }
+      # Pivot the table
+      cumulative_table <- dcast(cumulative_data, Loss_Year ~ Development_Year, value.var = "Cumulative_Claims")
       
       # Order columns for better visualization
       cumulative_table <- cumulative_table[, c(1, order(as.integer(colnames(cumulative_table)[2:ncol(cumulative_table)])) + 1)]
